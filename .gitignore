@@ -1,3 +1,9 @@
+#### my stuff
+data/cifar-10-orig
+
+
+#### Defaults suggested by git
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -19,7 +25,7 @@ lib64/
 parts/
 sdist/
 var/
-wheels/
+wheels/ß
 share/python-wheels/
 *.egg-info/
 .installed.cfg
