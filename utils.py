@@ -9,6 +9,8 @@ import torchvision.transforms as transforms
 from torch.nn import Module
 from torch.utils.data import random_split, DataLoader, TensorDataset, RandomSampler, ConcatDataset
 
+from img_transformation import img_transformation
+
 def get_device():
     if torch.cuda.is_available():
         return "cuda"
@@ -43,68 +45,13 @@ def CNN_params_setup(device):
     CNN_params["weight_decay"] = weight_decay
     CNN_params["device"] = device
     return CNN_params
-    
-def img_transformation(data, prob = 0.5, variability = 3, random_erase_greyscale = True, seed = None):
-    """ Function to apply non-synthetix 
-        Data (tensor): either a 3d image or a 4d tensor of images
-        Prob (0 <= float <= 1) chance that any given image will be transformed. Defaults to 0.5.
-        variability (float): expects a value between 1 and 5, but isn't restricted to this - can take anything from 0 to 8 at least. Defaults to 3. 
-        random_erase_greyscale (Bool, optional): Whether to include random erasures into the image transformations. Defaults to True.
-        """
-    v = variability # for simplicity
-    if v < 0 or v > 5:
-        warnings.warn(f"Note unexpected variability value {v}; if not between 0 and 5, may have unexpected effects.")
-
-    if seed is not None:
-        random.seed(seed)
-        np.random.seed(seed)
-        torch.manual_seed(seed)
-
-    # Define common transformations
-    transform_list = [transforms.RandomResizedCrop(32, (1-(0.1*v), 1+(0.2*v)), antialias=True),
-        transforms.Pad(padding=12, fill=0, padding_mode='symmetric'),
-        transforms.RandomAffine(degrees=9 * v, shear=3.3 * v),
-        transforms.CenterCrop(32),
-        transforms.ColorJitter(brightness=0.08 * v, contrast=0.08 * v, saturation=0.1 * v, hue=(0.06 * v if v <= 5 else 0.5))]
-    
-    # Add conditional transformations
-    if v < 1:
-        pass  # No extra transformations for v < 1
-    else:
-        transform_list.append(transforms.RandomHorizontalFlip())
-        transform_list.append(transforms.GaussianBlur(kernel_size=int(np.floor(v/4))*2+1))
-    
-    if random_erase_greyscale:
-        transform_list.append(transforms.RandomGrayscale(p=0.04 * v))
-        if v >= 1:
-            transform_list.append(transforms.RandomErasing(p = (0.15 * v if v <= 6 else 1), scale=(0.01 * v, 0.05 * v))) 
-    
-    transform = transforms.Compose(transform_list)
-    
-    if data.ndim == 3:
-        if random.random() < prob:
-            out_img = transform(torch.tensor(data))
-        else:
-            out_img = torch.tensor(data)
-        return out_img
-    elif data.ndim == 4:
-        out_imgs = torch.empty_like(data)
-        for i in range(len(data)):
-            if random.random() < prob:
-                out_img = transform(data[i])
-            else:
-                out_img = torch.tensor(data)
-            out_imgs[i] = out_img
-        return out_imgs
-    else:
-        raise ValueError("Input image has unknown number of dimensions.")
 
 def conv_augmenter(train_data, aug_ratio = 2, aug_var = 3, return_combined = True, labelled_data = True, random_erase_greyscale = True):
     """Function to carry out conventional image augmentation. Uses `img_transformation` function.
     Args:
         train_data (Dataset): Dataset of (real) training images.
         aug_ratio (float, optional): The proportion of augmented images (to real images) to create. Must be >= 1. Defaults to 2.
-        aug_var (float, optional): The transform variability parameter to use, typically a value between 0 and 5 (0 for no augmentations). Defaults to 3.
+        aug_var (float, optional): The transform variability parameter gamma to use, typically a value between 0 and 5 (0 for no augmentations). Defaults to 3.
         return_combined (Bool, optional): Whether to return combined real & augmented data, or the augmented data only. Defaults to True.
         labelled_data (Bool, optional): Whether handling data with labels, or images only. Defaults to True.
         random_erase_greyscale (Bool, optional): Whether to include random erasures & greyscaling into the image transformations. Defaults to True.
@@ -121,12 +68,12 @@ def conv_augmenter(train_data, aug_ratio = 2, aug_var = 3, return_combined = Tru
 
     if labelled_data:
         for img, label in aug_dataloader:
-            new_img = img_transformation(img, prob = 1, variability = aug_var, random_erase_greyscale = random_erase_greyscale)
+            new_img = img_transformation(img, prob = 1, gamma = aug_var, random_erase_greyscale = random_erase_greyscale)
             aug_imgs += [new_img.squeeze(0)]; aug_labels += [label]
         aug_data = TensorDataset(torch.stack(aug_imgs), torch.tensor(aug_labels))
     else:
         for img in aug_dataloader:
-            new_img = img_transformation(img[0], prob = 1, variability = aug_var, random_erase_greyscale = random_erase_greyscale)
+            new_img = img_transformation(img[0], prob = 1, gamma = aug_var, random_erase_greyscale = random_erase_greyscale)
             aug_imgs += [new_img.squeeze(0)]
         aug_data = TensorDataset(torch.stack(aug_imgs))
 
