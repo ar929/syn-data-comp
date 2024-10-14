@@ -9,7 +9,7 @@ def img_transformation(data, prob=1, gamma=3, random_erase_greyscale=True, seed=
 
     Args:
         data (tensor): A 3D image (single) or a 4D tensor (batch).
-        prob (float, 0 <= prob <= 1): Probability that any given image will be transformed. Defaults to 0.5.
+        prob (float, 0 <= prob <= 1): Probability that any given image will be transformed. Defaults to 1.
         gamma (float): Transformation intensity parameter. Clamped between 0 and 10, defaults to 3.
         random_erase_greyscale (bool, optional): Whether to include random erasure and grayscale transformations. Defaults to True.
         seed (int, optional): A seed for reproducibility. Defaults to None.
