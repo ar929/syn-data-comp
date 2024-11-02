@@ -18,6 +18,10 @@ import torchvision.utils as vutils
 from torchvision.datasets import CIFAR10
 from transformers import ImageGPTImageProcessor, ImageGPTForCausalImageModeling
 
+from pytorch_fid.inception import InceptionV3
+from scipy import linalg
+from torch.nn.functional import adaptive_avg_pool2d
+
 from img_transformation import img_transformation
 
 def get_device():
@@ -1103,3 +1107,102 @@ def test_gan(gen_model_version, reps = 1, model_type = "v2", gen_model_parent_pa
             summary_dict['std'][key] = np.std(value)
 
         return summary_dict
+    
+def calculate_frechet_distance(mu1, sigma1, mu2, sigma2, eps=1e-6):
+    """Numpy implementation of the Frechet Distance.
+    The Frechet distance between two multivariate Gaussians X_1 ~ N(mu_1, C_1)
+    and X_2 ~ N(mu_2, C_2) is
+            d^2 = ||mu_1 - mu_2||^2 + Tr(C_1 + C_2 - 2*sqrt(C_1*C_2)).
+
+    Stable version by Dougal J. Sutherland.
+
+    Params:
+    -- mu1   : Numpy array containing the activations of a layer of the
+               inception net (like returned by the function 'get_predictions')
+               for generated samples.
+    -- mu2   : The sample mean over activations, precalculated on an
+               representative data set.
+    -- sigma1: The covariance matrix over activations for generated samples.
+    -- sigma2: The covariance matrix over activations, precalculated on an
+               representative data set.
+
+    Returns:
+    --   : The Frechet Distance.
+    """
+
+    mu1 = np.atleast_1d(mu1)
+    mu2 = np.atleast_1d(mu2)
+
+    sigma1 = np.atleast_2d(sigma1)
+    sigma2 = np.atleast_2d(sigma2)
+
+    assert mu1.shape == mu2.shape, \
+        'Training and test mean vectors have different lengths'
+    assert sigma1.shape == sigma2.shape, \
+        'Training and test covariances have different dimensions'
+
+    diff = mu1 - mu2
+
+    # Product might be almost singular 
+    # covmean, _ = linalg.sqrtm(sigma1.dot(sigma2), disp=False)
+    # Trying fix from here: https://github.com/lucidrains/denoising-diffusion-pytorch/issues/213
+    covmean = linalg.fractional_matrix_power(sigma1.dot(sigma2), 0.5)
+    if not np.isfinite(covmean).all():
+        msg = ('fid calculation produces singular product; '
+               'adding %s to diagonal of cov estimates') % eps
+        print(msg)
+        offset = np.eye(sigma1.shape[0]) * eps
+        covmean = linalg.sqrtm((sigma1 + offset).dot(sigma2 + offset))
+
+    # Numerical error might give slight imaginary component
+    if np.iscomplexobj(covmean):
+        if not np.allclose(np.diagonal(covmean).imag, 0, atol=1e-3):
+            m = np.max(np.abs(covmean.imag))
+            raise ValueError('Imaginary component {}'.format(m))
+        covmean = covmean.real
+
+    tr_covmean = np.trace(covmean)
+
+    return (diff.dot(diff) + np.trace(sigma1)
+            + np.trace(sigma2) - 2 * tr_covmean)
+
+def calculate_activations_from_arr(images, model, batch_size, dims, device):
+    model.eval()
+    n_samples = images.shape[0]
+    pred_arr = np.empty((n_samples, dims))
+    start_idx = 0
+    for i in range(0, n_samples, batch_size):
+        batch = images[i:i+batch_size].to(device)
+        with torch.no_grad():
+            pred = model(batch)[0]
+        if pred.size(2) != 1 or pred.size(3) != 1:
+            pred = adaptive_avg_pool2d(pred, output_size=(1, 1))
+        pred = pred.squeeze(3).squeeze(2).cpu().numpy()
+        pred_arr[start_idx:start_idx + pred.shape[0]] = pred
+        start_idx = start_idx + pred.shape[0]
+    return pred_arr
+
+def calculate_activation_statistics_from_arrays(images, model, batch_size, dims, device):
+    """ 
+        Alteration to the file `calculate_activation_statistics` from fid_score, to calculate the activation statistics from arrays of images
+    """
+    pred_arr = calculate_activations_from_arr(images, model, batch_size, dims, device)
+
+    mu = np.mean(pred_arr, axis=0)
+    sigma = np.cov(pred_arr, rowvar=False)
+    return mu, sigma
+
+def calculate_fid_array(real_arr, fake_arr, device_name="cpu", verbose = False):
+    # Preset FID inception model parameters
+    device = torch.device(device_name)
+    incep_dims = 2048; incep_batch_size = 50
+    incep_mod = InceptionV3([InceptionV3.BLOCK_INDEX_BY_DIM[incep_dims]]).to(device)
+    if verbose:
+        print("Progress :: For validation by FID, calculating baseline inception statistics on the real images.")
+    mu_true, sigma_true = calculate_activation_statistics_from_arrays(real_arr, incep_mod, incep_batch_size, incep_dims, device)
+    if verbose:
+        print("Progress :: Calculating FID scores on the synthetic data")
+    mu, sigma = calculate_activation_statistics_from_arrays(fake_arr, incep_mod, incep_batch_size, incep_dims, device)
+    fid = calculate_frechet_distance(mu_true, sigma_true, mu, sigma)
+    return fid
+
