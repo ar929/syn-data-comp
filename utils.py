@@ -4,6 +4,7 @@ import string
 import cv2
 import numpy as np
 import random
+import tqdm
 import matplotlib.pyplot as plt
 
 from sklearn.metrics import accuracy_score
@@ -18,9 +19,13 @@ import torchvision.utils as vutils
 from torchvision.datasets import CIFAR10
 from transformers import ImageGPTImageProcessor, ImageGPTForCausalImageModeling
 
-from pytorch_fid.inception import InceptionV3
 from scipy import linalg
-from torch.nn.functional import adaptive_avg_pool2d
+from sklearn.linear_model import LinearRegression
+from torch.nn import Parameter as P
+import torch.nn.functional as F
+from F import adaptive_avg_pool2d
+from pytorch_fid.inception import InceptionV3
+from torchvision.models.inception import inception_v3
 
 from img_transformation import img_transformation
 
@@ -1206,3 +1211,150 @@ def calculate_fid_array(real_arr, fake_arr, device_name="cpu", verbose = False):
     fid = calculate_frechet_distance(mu_true, sigma_true, mu, sigma)
     return fid
 
+
+def get_activations(dataloader, model):
+    """
+    Get inception activations from dataset
+    """
+    pool = []
+    logits = []
+
+    for images in tqdm(dataloader):
+        # images = images.cuda()
+        images = images.to(torch.device("mps"))
+        with torch.no_grad():
+            pool_val, logits_val = model(images)
+            pool += [pool_val]
+            logits += [F.softmax(logits_val, 1)]
+
+    return torch.cat(pool, 0).cpu().numpy(), torch.cat(logits, 0).cpu().numpy()
+
+# Module that wraps the inception network to enable use with dataparallel and
+# returning pool features and logits.
+class WrapInception(nn.Module):
+    def __init__(self, net):
+        super(WrapInception,self).__init__()
+        self.net = net
+        self.mean = P(torch.tensor([0.485, 0.456, 0.406]).view(1, -1, 1, 1),
+                      requires_grad=False)
+        self.std = P(torch.tensor([0.229, 0.224, 0.225]).view(1, -1, 1, 1),
+                     requires_grad=False)
+    def forward(self, x):
+        x = (x - self.mean) / self.std
+        # Upsample if necessary
+        if x.shape[2] != 299 or x.shape[3] != 299:
+            x = F.interpolate(x, size=(299, 299), mode='bilinear', align_corners=True)
+        # 299 x 299 x 3
+        x = self.net.Conv2d_1a_3x3(x)
+        # 149 x 149 x 32
+        x = self.net.Conv2d_2a_3x3(x)
+        # 147 x 147 x 32
+        x = self.net.Conv2d_2b_3x3(x)
+        # 147 x 147 x 64
+        x = F.max_pool2d(x, kernel_size=3, stride=2)
+        # 73 x 73 x 64
+        x = self.net.Conv2d_3b_1x1(x)
+        # 73 x 73 x 80
+        x = self.net.Conv2d_4a_3x3(x)
+        # 71 x 71 x 192
+        x = F.max_pool2d(x, kernel_size=3, stride=2)
+        # 35 x 35 x 192
+        x = self.net.Mixed_5b(x)
+        # 35 x 35 x 256
+        x = self.net.Mixed_5c(x)
+        # 35 x 35 x 288
+        x = self.net.Mixed_5d(x)
+        # 35 x 35 x 288
+        x = self.net.Mixed_6a(x)
+        # 17 x 17 x 768
+        x = self.net.Mixed_6b(x)
+        # 17 x 17 x 768
+        x = self.net.Mixed_6c(x)
+        # 17 x 17 x 768
+        x = self.net.Mixed_6d(x)
+        # 17 x 17 x 768
+        x = self.net.Mixed_6e(x)
+        # 17 x 17 x 768
+        # 17 x 17 x 768
+        x = self.net.Mixed_7a(x)
+        # 8 x 8 x 1280
+        x = self.net.Mixed_7b(x)
+        # 8 x 8 x 2048
+        x = self.net.Mixed_7c(x)
+        # 8 x 8 x 2048
+        pool = torch.mean(x.view(x.size(0), x.size(1), -1), 2)
+        # 1 x 1 x 2048
+        logits = self.net.fc(F.dropout(pool, training=False).view(pool.size(0), -1))
+        # 1000 (num_classes)
+        return pool, logits
+
+def load_inception_net(parallel=False):
+    inception_model = inception_v3(pretrained=True, transform_input=False)
+    #inception_model = WrapInception(inception_model.eval()).cuda()
+    inception_model = WrapInception(inception_model.eval()).to(torch.device("mps"))
+    if parallel:
+        inception_model = nn.DataParallel(inception_model)
+    return inception_model
+
+def calculate_FID_infinity_array(real_arr, fake_arr, batch_size=50, min_fake=5000, num_points=15):
+    """
+    Calculates effectively unbiased FID_inf using extrapolation given 
+    arrays (currently working with torch tensors) of real & synthetic data
+    Args:
+        real_array: (arr)
+            An array of real data, n images in 3 colour channels, shape:
+            n by 3 by x by y 
+        fake_array: (arr)
+            An array of fake data, m images in 3 colour channels, shape:
+            m by 3 by x by y 
+        batch_size: (int)
+            The batch size for dataloader.
+            Default: 50
+        min_fake: (int)
+            Minimum number of images to evaluate FID on.
+            Default: 5000
+        num_points: (int)
+            Number of FID_N we evaluate to fit a line.
+            Default: 15
+    """
+
+    # load pretrained inception model 
+    inception_model = load_inception_net()
+
+    # get all activations of the images
+    ## real_act, _ = compute_path_statistics(real_path, batch_size, model=inception_model)
+    ## real_m, real_s = np.mean(real_act, axis=0), np.cov(real_act, rowvar=False)
+
+    ##### real_m, real_s = calculate_activation_statistics_from_arrays(real_arr, batch_size, model=inception_model, dims = 2048, device = "mps")
+
+    real_dataloader = torch.utils.data.DataLoader(real_arr, batch_size=batch_size, drop_last=False)
+    real_act, _ = get_activations(real_dataloader, model=inception_model)
+    real_m, real_s = np.mean(real_act, axis=0), np.cov(real_act, rowvar=False)
+
+    fake_dataloader = torch.utils.data.DataLoader(fake_arr, batch_size=batch_size, drop_last=False)
+    fake_act, _ = get_activations(fake_dataloader, model=inception_model)
+
+    num_fake = len(fake_act)
+    assert num_fake > min_fake, \
+        'number of fake data must be greater than the minimum point for extrapolation'
+
+    fids = []
+
+    # Choose the number of images to evaluate FID_N at regular intervals over N
+    fid_batches = np.linspace(min_fake, num_fake, num_points).astype('int32')
+
+    # Evaluate FID_N
+    for fid_batch_size in fid_batches:
+        # sample with replacement
+        np.random.shuffle(fake_act)
+        fid_activations = fake_act[:fid_batch_size]
+        m, s = np.mean(fid_activations, axis=0), np.cov(fid_activations, rowvar=False)
+        FID = calculate_frechet_distance(m, s, real_m, real_s)
+        fids.append(FID)
+    fids = np.array(fids).reshape(-1, 1)
+    
+    # Fit linear regression
+    reg = LinearRegression().fit(1/fid_batches.reshape(-1, 1), fids)
+    fid_infinity = reg.predict(np.array([[0]]))[0,0]
+
+    return fid_infinity
