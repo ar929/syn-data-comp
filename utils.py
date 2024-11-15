@@ -1114,6 +1114,56 @@ def test_gan(gen_model_version, reps = 1, model_type = "v2", gen_model_parent_pa
 
         return summary_dict
     
+def plot_gan_output(gen_model, n_syn = 2, model_type = "v2", label_dict = None, nn_input_size = 100, nn_n_layers_gen = 5, n_classes = None, seed = None, wrap_single = False, man_title = None):
+
+    label_list = gen_model.keys()
+    n_classes = len(label_list)
+
+    total_n_syn = n_syn * n_classes
+    test_synthetic_images_dict = create_gan_imgs(gen_model, n_syn = total_n_syn, model_save_type = "state_dict", model_type = model_type, 
+                                                 nn_input_size = nn_input_size, nn_n_layers_gen = nn_n_layers_gen, n_classes = n_classes, seed = seed)
+
+    if n_syn == 1 and wrap_single:
+        ncol = int(np.floor(len(label_list) / 2))
+        nrow = total_n_syn // ncol
+        fig, axes = plt.subplots(nrows = nrow, ncols = ncol, figsize = (4*ncol, 1+3*nrow), sharey = "row")
+        for j, (label, imgs) in enumerate(test_synthetic_images_dict.items()):
+            img = imgs[0]
+            i = int(j >= 5)
+            j = j % 5
+            ax = axes[i, j]
+            ax.imshow(np.array(img).transpose(1, 2, 0))
+            ax.axis('off')  # Optional: Turn off axis
+            if label_dict is not None:
+                ax.set_title(f"Image: {label_dict[label].decode('utf-8')}", fontsize=24)
+            else: 
+                ax.set_title(f"Image: {label}", fontsize=24)
+
+            plt.subplots_adjust(hspace = 0.2)
+        
+    else:
+        ncol = len(label_list)
+        nrow = total_n_syn // ncol
+        fig, axes = plt.subplots(nrows = nrow, ncols = ncol, figsize = (4*ncol, 1+3*nrow), sharey = "row")
+        for j, (label, imgs) in enumerate(test_synthetic_images_dict.items()):
+            for i, img in enumerate(imgs):
+                if nrow > 1:
+                    ax = axes[i, j]
+                else:
+                    ax = axes[j]
+                ax.imshow(np.array(img).transpose(1, 2, 0))
+                ax.axis('off')  # Optional: Turn off axis
+                if i == 0:
+                    if label_dict is not None:
+                        ax.set_title(f"Image: {label_dict[label].decode('utf-8')}", fontsize=24)
+                    else: 
+                        ax.set_title(f"Image: {label}", fontsize=24)
+    title_text = man_title if man_title is not None else "Sample images from GAN"
+    y_height = 1.03 if wrap_single else 1.1
+    plt.suptitle(title_text, fontsize=36, y=y_height)
+    plt.show()
+
+    
 def calculate_frechet_distance(mu1, sigma1, mu2, sigma2, eps=1e-6):
     """Numpy implementation of the Frechet Distance.
     The Frechet distance between two multivariate Gaussians X_1 ~ N(mu_1, C_1)
