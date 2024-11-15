@@ -90,7 +90,7 @@ def test_model_from_path(test_methods, save_type, epochs, out_path, device_name,
     model_version = "final" if save_type == "final" else epochs
     test_scores_dict = utils.test_gan(gen_model_version = model_version, gen_model_parent_path = out_path, methods = test_methods, device_name=device_name,
                                             nn_input_size = input_size, nn_n_layers_gen = n_layers_gen, reps = test_reps, verbose = (test_reps == 1), 
-                                            mmd_sigma = mmd_sigma, class_n_real = class_n_real, class_drop_conv = class_drop_conv, dist_n_real = dist_n_real, model_type=gan_type)
+                                            class_n_real = class_n_real, class_drop_conv = class_drop_conv, model_type=gan_type)
     json.dump(test_scores_dict, open(f"{out_path}/test_scores.json", 'w'))
     t1 = time()
     print(f"    That took {(t1-t0)/60:.1f} minutes.")
@@ -185,8 +185,8 @@ if __name__ == "__main__":
     print(f"Progress :: Setting up data")
     train_dataset, _ = import_data_to_mem(dataset_name)
 
-    if augmentation:
-        out_path = f"{out_path}_aug_ratio_{aug_ratio}"
+    # if augmentation:
+    #     out_path = f"{out_path}_aug_ratio_{aug_ratio}"
 
     # Otherwise, split and sample it by class
     gan_type = "v2"
@@ -206,7 +206,8 @@ if __name__ == "__main__":
     save_logs_to_jsons(out_path, mean_disc_loss, mean_gen_loss, mean_val_disc_loss, dict_out_type = dict_out_type)
 
     if test_methods is not None:
-        test_model_from_path(test_methods, save_type, epochs, out_path, device_name, input_size, n_layers_gen, test_reps, class_drop_conv = class_drop_conv, gan_type = gan_type)
+        test_model_from_path(test_methods, save_type, epochs, out_path, device_name, input_size, 
+                             n_layers_gen, test_reps, class_drop_conv = class_drop_conv, gan_type = gan_type)
 
     t11 = time()
     print(f"Total time taken: {(t11-t00)/60:.1f} minutes.")

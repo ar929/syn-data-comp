@@ -23,7 +23,7 @@ from scipy import linalg
 from sklearn.linear_model import LinearRegression
 from torch.nn import Parameter as P
 import torch.nn.functional as F
-from F import adaptive_avg_pool2d
+from torch.nn.functional import adaptive_avg_pool2d
 from pytorch_fid.inception import InceptionV3
 from torchvision.models.inception import inception_v3
 
@@ -1007,7 +1007,7 @@ def create_gan_imgs(gen_model, n_syn, model_save_type = "state_dict", parent_pat
 
     return synthetic_images_dict
 
-def test_gan(gen_model_version, reps = 1, model_type = "v2", gen_model_parent_path = "gan_training", real_path = "cifar-10-batches-py", n_classes = 10, 
+def test_gan(gen_model_version, reps = 1, model_type = "v2", gen_model_parent_path = "gan_training", n_classes = 10, 
              methods = ["fid"], device_name = "cpu", nn_input_size = 100, nn_n_feat = 64, nn_n_layers_gen = 5,
              class_n_real = 1024, class_drop_conv = 0.5, class_aug_ratio = 4, verbose = False):
     assert (isinstance(reps, int) and reps > 0), "reps must be a positive integer"
@@ -1021,12 +1021,14 @@ def test_gan(gen_model_version, reps = 1, model_type = "v2", gen_model_parent_pa
         root=f'./{"data/cifar-10-orig"}',  # Change the root directory as needed
         train=True,      # Set to True for the training set
         transform=transform,
+        target_transform=torch.tensor,  # Convert labels to tensors
         download=True)
 
     test_dataset = full_cifar_dataset(
         root=f'./{"data/cifar-10-orig"}',  # Change the root directory as needed
         train=False,     # Set to False for the test set
-        transform=transform,
+        transform=transform,    
+        target_transform=torch.tensor,  # Convert labels to tensors
         download=True)
 
     device = torch.device(device_name)
@@ -1054,22 +1056,21 @@ def test_gan(gen_model_version, reps = 1, model_type = "v2", gen_model_parent_pa
                 class_synthetic_images_dict = create_gan_imgs(gen_model, n_syn = class_n_syn, model_save_type = "state_dict", model_type=model_type,
                                                             nn_input_size=nn_input_size, nn_n_feat=nn_n_feat, nn_n_layers_gen=nn_n_layers_gen, n_classes = n_classes)
 
-                class_mod = "cnn_v2"
-                classifer_CNN_params = CNN_params_setup(class_mod, device)
+                classifer_CNN_params = CNN_params_setup(device)
                 dropout_fc = classifer_CNN_params["dropout_fc"]
                 dropout_conv = class_drop_conv
                 classifier_model = Cifar_CNN(num_channels = 3, classes = 10, dropout_conv = dropout_conv, dropout_fc = dropout_fc).to(device)
                 # Calculate baseline accuracy
-                _, _, baseline_test_acc, _ = nn_trainer(classifier_model, class_train_dataset_samp, test_dataset, device_str = device_name, 
-                                                                verbose = False, score_type="acc", CNN_params_dict=classifer_CNN_params, augmentation=False)
+                _, _, baseline_test_acc = nn_trainer(classifier_model, class_train_dataset_samp, test_dataset, device_str = device_name, 
+                                                                verbose = False, CNN_params_dict=classifer_CNN_params, augmentation=False)
                 
                 class_syn_dataset = syn_dict_to_dataset(class_synthetic_images_dict)
                 class_aug_dataset = ConcatDataset([class_train_dataset_samp, class_syn_dataset])
 
                 # Calculate augmented accuracy
                 classifier_model = Cifar_CNN(num_channels = 3, classes = 10, dropout_conv = dropout_conv, dropout_fc = dropout_fc).to(device)
-                _, _, aug_test_acc, _ = nn_trainer(classifier_model, class_aug_dataset, test_dataset, device_str = device_name, 
-                                                                verbose = False, score_type="acc", CNN_params_dict=classifer_CNN_params, augmentation=False)
+                _, _, aug_test_acc = nn_trainer(classifier_model, class_aug_dataset, test_dataset, device_str = device_name, 
+                                                                verbose = False, CNN_params_dict=classifer_CNN_params, augmentation=False)
                 relative_accuracy = aug_test_acc/baseline_test_acc
                 rep_scores_dict[test_method] = relative_accuracy
 
@@ -1090,7 +1091,7 @@ def test_gan(gen_model_version, reps = 1, model_type = "v2", gen_model_parent_pa
                     fid_score = calculate_fid_array(real_tensor, syn_tensor, device_name=device_name)
                     rep_scores_dict[test_method] = fid_score
                 elif test_method == "fid_inf":
-                    fid_inf_score = calculate_FID_infinity_array(real_tensor, syn_tensor, min_fake=999, num_points=15, device_name=device_name)
+                    fid_inf_score = calculate_FID_infinity_array(real_tensor, syn_tensor, min_fake=999, num_points=15)
                     rep_scores_dict[test_method] = fid_inf_score
 
         all_reps_scores_dict[rep] = rep_scores_dict
@@ -1219,7 +1220,7 @@ def get_activations(dataloader, model):
     pool = []
     logits = []
 
-    for images in tqdm(dataloader):
+    for images in dataloader:
         # images = images.cuda()
         images = images.to(torch.device("mps"))
         with torch.no_grad():
