@@ -988,7 +988,10 @@ def create_gan_imgs(gen_model, n_syn, model_save_type = "state_dict", parent_pat
                 net_generator, optimizer_generator, _ = load_model(path, net_generator, optimizer_generator)
             elif model_save_type == "state_dict":
                 net_generator.load_state_dict(model['state_dict'])
-                optimizer_generator.load_state_dict(model['optimizer']) ##### don't need
+                # optimizer_generator.load_state_dict(model['optimizer']) ##### don't need
+            elif model_save_type == "scripted":
+                net_generator.load_state_dict(model)
+                # net_generator.load_state_dict(torch.load("generator_state_dict.pth", map_location="mps"))
             else:
                 raise ValueError(f"Unrecognised model_save_type {model_save_type}")
             
@@ -1114,13 +1117,14 @@ def test_gan(gen_model_version, reps = 1, model_type = "v2", gen_model_parent_pa
 
         return summary_dict
     
-def plot_gan_output(gen_model, n_syn = 2, model_type = "v2", label_dict = None, nn_input_size = 100, nn_n_layers_gen = 5, n_classes = None, seed = None, wrap_single = False, man_title = None):
+def plot_gan_output(gen_model, n_syn = 2, model_type = "v2", label_dict = None, model_save_type = "state_dict",
+        nn_input_size = 100, nn_n_layers_gen = 5, n_classes = None, seed = None, wrap_single = False, man_title = None):
 
     label_list = gen_model.keys()
     n_classes = len(label_list)
 
     total_n_syn = n_syn * n_classes
-    test_synthetic_images_dict = create_gan_imgs(gen_model, n_syn = total_n_syn, model_save_type = "state_dict", model_type = model_type, 
+    test_synthetic_images_dict = create_gan_imgs(gen_model, n_syn = total_n_syn, model_save_type = model_save_type, model_type = model_type, 
                                                  nn_input_size = nn_input_size, nn_n_layers_gen = nn_n_layers_gen, n_classes = n_classes, seed = seed)
 
     if n_syn == 1 and wrap_single:
