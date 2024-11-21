@@ -350,6 +350,7 @@ def nn_trainer(model, train_data, test_data = None, opt_type = "adam", loss_type
         device = torch.device("cpu")
         warnings.warn(f"{device_str} device specified but not available, so using cpu")
     else: device = torch.device("cpu")
+    model = model.to(device)
 
     #Setup training/validation data split
     train_size = int(len(train_data) * (1 - val_split))

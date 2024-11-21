@@ -96,9 +96,9 @@ if recalculate_results:
             end_time = time.time()
             print(f"Run {(i+1) + (j)*(len(n_samp))} out of {len(n_samp) * len(alphas)} complete, for {n} samples and {score_name}. Test score = {round(test_acc, 3)}. Runtime = {round(end_time - start_time, 1)} seconds")
 
-    # Save the output dictionary to json file
-    with open(aug_lc_dict_json_name, 'w') as json_file:
-        json.dump(aug_lc_dict, json_file)
+            # Save the output dictionary to json file
+            with open(aug_lc_dict_json_name, 'w') as json_file:
+                json.dump(aug_lc_dict, json_file)
 else:
     with open(aug_lc_dict_json_name, 'r') as json_file:
         aug_lc_dict = json.load(json_file)
