@@ -1,5 +1,7 @@
 #### my stuff
 data/cifar-10-orig
+data/synthetic_cifar_seed_42
+data/synthetic_cifar_43_to_47.zip
 models
 
 
