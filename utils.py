@@ -1,10 +1,13 @@
 import os
+import re
 import warnings
 import string
 import cv2
 import numpy as np
 import random
 import tqdm
+import zipfile
+import pandas as pd
 import matplotlib.pyplot as plt
 
 from sklearn.metrics import accuracy_score
@@ -294,7 +297,6 @@ def nn_trainer(model, train_data, test_data = None, opt_type = "adam", loss_type
         model (PyTorch model): Input neural network model to be trained. Note this has already been typically sent 'to' the device to be used for model training.
         train_data (dataset): Dataset of training images
         test_data (dataset): Dataset of testing images. Set to None to skip calculating a separate test score. Defaults to None.
-        score_type (str, optional): The type of test score to return. Currently takes "f1" or "acc". Defaults to "f1".
         opt_type (str, optional): Name of optimiser function to use. Currently only takes "adam". Defaults to "adam".
         loss_type (str, optional): Name of loss function to use. Currently only takes "nll". Defaults to "nll".
         val_split (float, optional): Proportion of data to use for the validation set (and 1 - val_split for the test set) Overwritten if k_fold_k used. Set to 0 for no validation. Defaults to 0.2.
@@ -303,7 +305,7 @@ def nn_trainer(model, train_data, test_data = None, opt_type = "adam", loss_type
         batch_size (int, optional): Size of batches to split the data into for training. Defaults to 64.
         learning_rate (float, optional): Learning rate parameter for the optimiser. Defaults to 1e-3.
         lr_sched (str, optional): If not None, type of learning rate lr_scheduler (currently only takes None or not for a ReduceLROnPlateau). Defaults to None.
-        augmentation (bool, optional): Whether non-synthetic (transformational) image augmentations are to be used. Defaults to False.
+        augmentation (bool, optional): Whether conventional (transformational) image augmentations are to be used. Defaults to False.
         aug_ratio (float, optional): If augmentation, the proportion of augmented images to create. Must be = 1. Defaults to 2.
         aug_var (float, optional): If augmentation, the transform variability parameter to use, typically a value between 0 and 5 (0 for no augmentations). Defaults to 3.
         weight_decay (float, optional): Weight decay parameter for the optimiser. Defaults to 0.
@@ -313,8 +315,8 @@ def nn_trainer(model, train_data, test_data = None, opt_type = "adam", loss_type
                                           Parameters included are epochs, batch_size, learning_rate, val_split, weight_decay and device. Defaults to None.
     Returns:
         model (PyTorch model): Final trained neural network model.
-        val_score (float): Final validation score from the training, to use for hyperparameter optimisation. Returns score of choice (score_type) as a value between 0 and 1.
-        test_score (float): Test score from the training. Returns score of choice (score_type) as a value between 0 and 1.
+        val_score (float): Final validation score from the training, to use for hyperparameter optimisation.
+        test_score (float): Test score from the training.
     """
     from torch.optim import Adam
     from torch.nn import NLLLoss
@@ -436,6 +438,134 @@ def nn_trainer(model, train_data, test_data = None, opt_type = "adam", loss_type
         
     return model, val_score, test_score
 
+def num_from_syn_name(set_name):
+    """ Function to get the replicate number from a synthetic set name. """
+    match = re.search(r'\d+', set_name)
+    if match:
+        number = int(match.group())
+    else:
+        number = 1
+        warnings.warn("No replicate number provided in the synthetic set name, so assuming 1.")
+    return number
+
+def synthetic_classifier_accuracy(synthetic_datasets, synthetic_label_sets, test_dataset, CNN_params, syn_augment = False, 
+                                  x_train_real = None, y_train_real = None, augmentation = False, aug_var = 3, aug_ratio = 2, syn_vary_aug_ratio = False, device_str = "cpu"):
+    """Assessing performance of synthetic data by how well it can be used to train a classifier. 
+        Calculates the accuracy of a synthetic image set when used to train a classifier on CIFAR-10 data.
+        Either training the classifier using the synthetic data only, or when used to augment a real dataset.
+        Requires synthetic data & labels, test data & labels (the real data),
+        parameters for the CIFAR CNN classifier model and optionally whether to augment real dataset (if provided).
+    Args:
+        synthetic_datasets (dict): The synthetic images to assess classifier accuracy on. Dict of datasets keyed by synthetic image type, each element is n x 3 x 32 x 32 array of n images.
+        synthetic_label_sets (dict): Labels corresponding to the synthetic images. Dict of n-length lists, keyed by synthetic image type.
+        test_dataset (TensorDataset): Real images to test the classifier on. Previous functions return a TensorDataset of CIFAR images to test on.
+        CNN_params (dict): Input parameters for the CNN classifier model
+        syn_augment (bool, optional): Whether to use the synthetic data to syn_augment a real dataset (if provided) for model training. Defaults to False.
+        x_train_real (Tensor, optional): If syn_augment==True, the real training images to be syn_augmented with synthetic data. Tensor of m images (m x 3 x 32 x 32). Defaults to None.
+        y_train_real (list, optional): If syn_augment==true, labels corresponding to the real training images. List of m images. Defaults to None.
+        augmentation (Boolean, optional): Whether or not to carry out conventional data augmentations as part of the nn training. Defaults to False.
+        aug_var (Float, optional): If augmentation==True, the variability parameter for the augmentations. Must be non-negative, typically <= 5. Defaults to 3.
+        aug_ratio (Float, optional): If augment==True, the amount of data to create with conventional augmentations. Must be >1, defaults to 2.
+        syn_vary_aug_ratio (Boolean, optional): If augment==True, this controls whether to vary the aug_ratio for synthetic sets to use less augmenting data with more synthetic replicates. Defaults to False.
+        device_str (str, optional): Name of the device to be used for model training. Defaults to "cpu".
+    Returns:
+        dict: Classifier accuracies for each synthetic image type.
+    """
+    # Preset the device to use
+    device = CNN_params["device"]
+    # Preset a dictionary for the outputs
+    accuracy_dict = {}
+    for set_name, data in synthetic_datasets.items(): # loop through the input synthetic datasets
+        if data is not None: #only carry on if there is data
+            # Sort out the labels and x & y data for the given data subset
+            labels = synthetic_label_sets[set_name]
+            x_train = torch.from_numpy(np.array(data).reshape(-1, 3, 32, 32)).float()
+            y_train = torch.tensor(labels).type(torch.LongTensor)
+            
+            if syn_augment: #If we want to use the synthetic data to syn_augment a real dataset, concatenate the two sets together
+                # save the datasets as a tensor object, and check the values
+                x_train_aug = torch.cat((x_train_real, x_train))
+                y_train_aug = torch.cat((torch.tensor(y_train_real), y_train))
+                syn_train_dataset = TensorDataset(x_train_aug, y_train_aug)
+                assert ((x_train_aug >= 0).all() and (x_train_aug <= 1).all()), f"image data needs to be in range [0, 1] for array `x_train_aug` for synthetic set {set_name}"
+            else:
+                syn_train_dataset = TensorDataset(x_train, y_train)
+                assert ((x_train >= 0).all() and (x_train <= 1).all()), f"image data needs to be in range [0, 1] for array `x_train` for synthetic set {set_name}"
+
+            # If reducing the amount of augmented data for synthetic sets, use the num_from_syn_name function, and divide aug_ratio by that number.
+            # If this is less than 1, warn the user and set the value to just over 1, otherwise the trainer will break.
+            if syn_vary_aug_ratio:
+                rep_count = num_from_syn_name(set_name)
+                this_aug_ratio = aug_ratio / (1 + rep_count) # add 1 because the ratio includes the real data
+                if this_aug_ratio < 1:
+                    warnings.warn(f"""User has selected to adjust the augmentation ratio for different synthetic sets. 
+                                  However, for set {set_name}, this would lead to a new aug_ratio less than or equal to 1, so setting to 1.001 instead. 
+                                  Consider a larger value for aug_ratio.""")
+                    this_aug_ratio = 1.001
+            else:
+                this_aug_ratio = aug_ratio
+
+            # Load and train the classifier model on the (syn_augmented) synthetic training dataset, then and return calculate its accuracy on the test set
+            # Define the model. We need to do this in each loop, as python stores it as a mutable object
+            dropout_conv = CNN_params["dropout_conv"]
+            dropout_fc = CNN_params["dropout_fc"]
+            model = Cifar_CNN(num_channels = 3, classes = 10, dropout_conv = dropout_conv, dropout_fc = dropout_fc).to(device)
+
+            _, _, test_accuracy = nn_trainer(model, syn_train_dataset, test_dataset, verbose = False, CNN_params_dict=CNN_params, 
+                                                 augmentation=augmentation, aug_var=aug_var, aug_ratio=this_aug_ratio, device_str=device_str)
+
+            accuracy_dict[set_name] = test_accuracy
+    return accuracy_dict
+
+def classifier_accuracies(synthetic_datasets, synthetic_label_sets, train_samp, test_dataset, syn_augment, images_true, y_train_true, device, device_name, 
+                          augment = False, aug_var = 3, aug_ratio = 2, syn_vary_aug_ratio = False, verbose = True):
+    """Function to calculate the classification-accuracy of a given synthetic dataset, compared against a given real set (assumed to be the generating set)
+    Args:
+        synthetic_datasets (dict): The synthetic images to assess classifier accuracy on. Dict of datasets keyed by synthetic image type, each element is n x 3 x 32 x 32 array of n images.
+        synthetic_label_sets (dict): Labels corresponding to the synthetic images. Dict of n-length lists, keyed by synthetic image type.
+        train_samp (dataset): Sample of real data to calculate baseline test score
+        test_dataset (dataset): Holdout real test data
+        syn_augment (Bool): Whether or not to syn_augment the synthetic data with the real data (provided below), as opposed to simply running on the synthetic-only.
+        images_true (tensor): Real images to syn_augment the synthetic data with (if desired)
+        y_train_true (list): Real labels accompanying the real images
+        device (torch device): Device to run computing on
+        device_name (str): Name of the above device
+        augment (Boolean, optional): Whether or not to carry out conventional data augments as part of the nn training. Defaults to False.
+        aug_var (Float, optional): If augment==True, the variability parameter for the augments. Must be non-negative, typically <= 5. Defaults to 3.
+        aug_ratio (Float, optional): If augment==True, the amount of data to create with conventional augmentations. Must be >1, defaults to 2.
+        syn_vary_aug_ratio (Boolean, optional): If augment==True, this controls whether to vary the aug_ratio for synthetic sets to use less augmenting data with more synthetic replicates. Defaults to False.
+        verbose (bool, optional): Use this to control the amount of printed output. Defaults to True.
+    Returns:
+        CNN_params (dict): Set of parameters for the given CNN model
+        baseline_test_acc (float): Output test accuracy for classifier trained on train_samp
+        accuracy_dict (dict): Dict of output test accuracies for each synthetic datasets
+    """
+    # Get the parameters to use for the given CNN model and call the CNN model defined in classification_fns
+
+    CNN_params = CNN_params_setup(device)
+    dropout_conv = CNN_params["dropout_conv"]; dropout_fc = CNN_params["dropout_fc"]
+    cnn_model = Cifar_CNN(num_channels = 3, classes = 10, dropout_conv = dropout_conv, dropout_fc = dropout_fc).to(device)
+
+    ### ARE WE? For now, doubling the baseline epochs, to ensure that the baseline is stable
+    baseline_CNN_params = CNN_params
+    # baseline_CNN_params["epochs"] = baseline_CNN_params["epochs"] * 2
+
+    # Start by calculating the test accuracy of the classifier when trained on the sample of real training images
+    if verbose:
+        print("Progress :: For validation by classifier accuracy, calculating baseline accuracy on the (real) test set.")
+    _, _, baseline_test_acc  = nn_trainer(cnn_model, train_samp, test_dataset, device_str = device_name, 
+                                                verbose = False, CNN_params_dict=baseline_CNN_params,
+                                                augmentation=augment, aug_var=aug_var, aug_ratio=aug_ratio)
+    if verbose:
+        print(f"The test accuracy score for the baseline set is", round(baseline_test_acc, 4))
+    # Then calculate the test accuracy of the classifier trained on each synthetic dataset
+    # option of to whther these sets are syn_augmented with the real images or not
+        print("Progress :: Calculating accuracies on the synthetic dataset "+("with" if syn_augment else "without") + " syn_augmenting real data.")
+    accuracy_dict = synthetic_classifier_accuracy(synthetic_datasets, synthetic_label_sets, test_dataset, CNN_params, 
+                                            syn_augment = syn_augment, x_train_real = images_true, y_train_real = y_train_true,
+                                            augmentation=augment, aug_var=aug_var, aug_ratio=aug_ratio, syn_vary_aug_ratio=syn_vary_aug_ratio, device_str = device_name)
+    return CNN_params, baseline_test_acc, accuracy_dict
+
 def igpt_model_setup(device_name, pretrained_ref = 'openai/imagegpt-small'):
     # Open the ImageGPT model from torchvision, save it and set up CPU/GPU device
     feature_extractor = ImageGPTImageProcessor.from_pretrained(pretrained_ref)
@@ -539,7 +669,331 @@ def create_igpt_img(real_img, img_sz, feature_extractor, clusters, model, device
 
     if return_img_dict: # Return an array of the images for further use
         return img_dict
+
+def zipped_image_generator(zip_file_path, file_names):
+    """ Function to open images out of a zipped file, using yield to give a generator (allowing to open without loading all images to memory)"""
+    with zipfile.ZipFile(zip_file_path, 'r') as zip_ref:
+        for file_name in file_names:
+            with zip_ref.open(file_name) as file_data:
+                image_data = np.frombuffer(file_data.read(), np.uint8)
+                image = cv2.imdecode(image_data, cv2.IMREAD_COLOR)
+                yield os.path.basename(file_name), image
+
+def synthetic_type_split_import(folder_path, split_method, name_cond = None, zipped = False, prompt_set = "full"):
+    """Function to support the ImageGPT synthetic data import. 
+    If desired to split the data by type, then this function is run. 
+    Args:
+        folder_path (str): Filepath (relative to current file) of the folder of synthetic images to import
+        split_method (str): E.g. "prompt_rep", the method with which to split the data (prompt_rep does this by prompt size name and rep size number)
+        name_cond (str or None, optional): Whether to only select images whose name select a certain string. Set to None if no such filtering desired. Defaults to None.
+        zipped (bool, optional): If the selected folder is zipped, need to additionally unzip in the process. Defaults to False.
+        prompt_set (str or list, optional): The set of prompts to use. Either "full" for the default 12: s/m/l 2/4/6/8, or specify a list. Defaults to "full"
+    Returns:
+        synthetic_datasets, synthetic_label_sets: dictionaries of the split datasets and label_sets, keyed by the split method (e.g. prompt & rep sizes)
+    """
+    if split_method == "prompt_rep":
+        # To sort them by prompt and rep size for training the different classifiers, 
+        # make a dict of 12 synthetic datasets (and 12 label sets) for all prompt size & rep size combos
+        if prompt_set == "full":
+            prompt_sizes = ['small', 'med', 'large']
+            rep_sizes = ['2', '4', '6', '8']
+        else:
+            prompt_sizes = list(set(item.split('-')[0] for item in prompt_set))
+            rep_sizes = list(set(item.split('-')[1] for item in prompt_set))
+            assert set(prompt_sizes).issubset(['small', 'med', 'large']), "Invalid prompts found"
+            assert all(rep.isdigit() for rep in rep_sizes), "Invalid reps found"
+
+        synthetic_datasets = {}; synthetic_label_sets = {}
+        for prompt in prompt_sizes:
+            for rep in rep_sizes:
+                synthetic_datasets[prompt + '-' + rep] = None
+                synthetic_label_sets[prompt + '-' + rep] = []
+        if zipped:
+            with zipfile.ZipFile(folder_path, 'r') as zip_ref:
+                file_names = sorted(zip_ref.namelist())
+                skipped_elts = file_names[0:1]
+                if any ('.png' in element for element in skipped_elts):
+                    raise ValueError("Accidentally deleted synthetic image while unzipping folder.")
+                file_names = file_names[1:]
+            for filename, image in zipped_image_generator(folder_path, file_names):
+                if filename.endswith('.png'): # Check is a png
+                    if name_cond is None or name_cond in filename: # If no name_cond filter is specified, or if the desired string IS in the current filename, continue
+                        if image is not None: # save the image
+                            # Get the prompt & rep sizes from the image title
+                            prompt = filename[:filename.find('-prompt')]
+                            rep = filename[filename.find('rep-size_')+len('rep-size_')]
+                        # Initialize a 4D array if it's not already initialized to store the data in
+                            if synthetic_datasets[prompt + '-' + rep] is None:
+                                synthetic_datasets[prompt + '-' + rep] = np.transpose(image, (2, 0, 1))[np.newaxis, ...]  # reshape the image to 3 x 32 x 32 as that's how the classifier is set up and add to 4D array
+                            else:
+                                # Append the current image to the 4D array
+                                synthetic_datasets[prompt + '-' + rep] = np.vstack((synthetic_datasets[prompt + '-' + rep], np.transpose(image, (2, 0, 1))[np.newaxis, ...]))
+                            label_index = filename.find('label-') # And save the corresponding label for classification
+                            if label_index != -1:
+                                label_value = int(filename[label_index+len('label-')])
+                                synthetic_label_sets[prompt + '-' + rep].append(label_value)
+                            else:
+                                raise ValueError(f"No label found for image {filename}")
+                            
+        else:
+            for filename in os.listdir(folder_path): # Loop through all files in the folder
+                if filename.endswith('.png'): # Check is a png
+                    if name_cond is None or name_cond in filename: # If no name_cond filter is specified, or if the desired string IS in the current filename, continue
+                        image_path = os.path.join(folder_path, filename)
+                        image = cv2.imread(image_path) # Read it as an image (reads to n x n x 3 BGR numpy array)
+                        if image is not None: # save the image
+                            # Get the prompt & rep sizes from the image title
+                            prompt = filename[:filename.find('-prompt')]
+                            rep = filename[filename.find('rep-size_')+len('rep-size_')]
+
+                        # Initialize a 4D array if it's not already initialized to store the data in
+                            if synthetic_datasets[prompt + '-' + rep] is None:
+                                synthetic_datasets[prompt + '-' + rep] = np.transpose(image, (2, 0, 1))[np.newaxis, ...]  # reshape the image to 3 x 32 x 32 as that's how the classifier is set up and add to 4D array
+                            else:
+                                # Append the current image to the 4D array
+                                synthetic_datasets[prompt + '-' + rep] = np.vstack((synthetic_datasets[prompt + '-' + rep], np.transpose(image, (2, 0, 1))[np.newaxis, ...]))
+                            label_index = filename.find('label-') # And save the corresponding label for classification
+                            if label_index != -1:
+                                label_value = int(filename[label_index+len('label-')])
+                                synthetic_label_sets[prompt + '-' + rep].append(label_value)
+                            else:
+                                raise ValueError(f"No label found for image {filename}")
+                    
+        # save the images as floats between 0 and 1
+        for key, value in synthetic_datasets.items():
+            if value is not None: # in case the dict is empty
+                new_val = value/255
+                synthetic_datasets[key] = new_val
+                assert ((new_val >= 0).all() and (new_val <= 1).all()), f"image data needs to be in range [0, 1] for array `new_val` in synthetic dataset {key}"
+
+        return synthetic_datasets, synthetic_label_sets
+    else:
+        raise ValueError(f"Unknown method to categorise/split the synthetic data provided by `split_method`={split_method}")
     
+def synthetic_data_import(folder_path, zipped = False, split_by_type = False, split_method = "prompt_rep", seed_subset = False, prompt_set = "full"):
+    """Function to import the synthetic images from a given folder, and split by type or seed if desired to create different datasets.
+    Args:
+        folder_path (str): Filepath (relative to current file) of the folder of synthetic images to import
+        zipped (bool): If the selected folder is zipped, need to additionally unzip in the process. Defaults to False.
+        split_by_type (str): Whether to split the output data by type (as specified in split_method). Defaults to False.
+        split_method (str): The method with which to split the data (prompt_rep does this by prompt size name and rep size number). Defaults to \'prompt_rep\'".
+        seed_subset (bool, optional): If desired to also output the data as split by the seed in the image name. Defaults to False.
+        prompt_set (str or list, optional): The set of prompts to use. Either "full" for the default 12: s/m/l 2/4/6/8, or specify a list. Defaults to "full"
+    Returns:
+        if split_by_type: 
+            if seed_subset: synthetic_datasets_by_seed, synthetic_label_sets_by_seed, each dictionaries keyed by the seed values in the image names. 
+                            Each element of the dictionary is a dictionary of datasets, keyed by the split method (e.g. prompt & rep sizes)
+            else not seed_subset: synthetic_datasets, synthetic_label_sets, dictionaries of datasets keyed by the split method (e.g. prompt & rep sizes)
+        else not split_by_type: raw_syn_data, a 4D tensor of the images (e.g. n x 32 x 32 x 3 for the CIFAR data), and labels, a 1D list of correpsonding labels
+    """
+    if split_by_type: # this will separate the images out by prompt and replication size
+        if seed_subset:
+            if zipped:
+                file_list = zipfile.ZipFile(folder_path, 'r').namelist()
+                skipped_elts = file_list[0:1]
+                if any ('.png' in element for element in skipped_elts):
+                    raise ValueError("Accidentally deleted synthetic image while unzipping folder.")
+                file_list = file_list[1:]
+            else:
+                file_list = os.listdir(folder_path)
+            seed_values = set()
+            for file_name in file_list:
+                if "_seed_" in file_name:
+                    start_index = file_name.find("_seed_") + len("_seed_")
+                    end_index = file_name.find("_", start_index)
+                    seed_value = file_name[start_index:end_index]
+                    seed_values.add(seed_value)
+                else:
+                    raise ValueError(f"Unexpected name \"{file_name}\" for image in {folder_path}, was expecting to include\"_seed_\"")
+            seed_values = sorted(seed_values)
+
+            synthetic_datasets_by_seed = {}; synthetic_label_sets_by_seed = {}
+            for seed in seed_values:
+                synthetic_result = synthetic_type_split_import(folder_path, split_method, name_cond = "_seed_"+seed, zipped = zipped)
+                synthetic_datasets_by_seed[seed] = synthetic_result[0]
+                synthetic_label_sets_by_seed[seed] = synthetic_result[1]
+            return synthetic_datasets_by_seed, synthetic_label_sets_by_seed
+
+        else:
+            synthetic_datasets, synthetic_label_sets = synthetic_type_split_import(folder_path, split_method, zipped = zipped, prompt_set = prompt_set)
+            return synthetic_datasets, synthetic_label_sets
+
+    else: # Otherwise, instead of splitting by prompt & rep size, just load in as a 4D tensor
+        if seed_subset:
+            raise NotImplementedError("I haven't yet coded doing subsetting by seed for the non-type-split data output.")
+        raw_syn_data = []
+        labels = []
+        for filename in os.listdir(folder_path): # Loop through all files in the folder
+            if filename.endswith('.png'): # Check is a png
+                image_path = os.path.join(folder_path, filename)
+                image = cv2.imread(image_path) # Read it as an image (reads to n x n x 3 BGR numpy array)
+                raw_syn_data.append(image)
+            
+            # Get the label
+            label_index = filename.find('label-')
+            if label_index != -1:
+                label = int(filename[label_index+len('label-')])
+            else:
+                raise ValueError(f"No label found for image {filename}")
+            labels += [label]
+
+        # save the images as floats between 0 and 1
+        for i in range(len(raw_syn_data)):
+            image = raw_syn_data[i]/255
+            assert ((image >= 0).all() and (image <= 1).all()), f"image data needs to be in range [0, 1] for array `new_val` in synthetic dataset"
+            raw_syn_data[i] = image
+        
+        # Save as a 4D torch tensor of images as 1D list of labels
+        raw_syn_data = np.stack(raw_syn_data, axis = 0)
+        raw_syn_data = torch.from_numpy(raw_syn_data).to(dtype=torch.float32)
+        raw_syn_data = raw_syn_data.permute(0, 3, 1, 2) # ensures consistent data structure
+        return raw_syn_data, labels
+
+def scores_compile(synthetic_datasets, scores_dict, baseline_test_acc = None):
+    """Function to compile synthetic scores from the different val_methods into one score_df
+    Args:
+        synthetic_datasets (dict): The synthetic images to assess classifier accuracy on. Dict of datasets keyed by synthetic image type, each element is n x 3 x 32 x 32 array of n images.
+        scores_dict (dict): Validation scores for each of the methods above
+        baseline_test_acc (Float, optional): Baseline test accuracy, required if class_acc is in val_methods. Defaults to None.
+    Returns:
+        DataFrame: df with columns of scores for each validation method and some descriptors for each synthetic set
+    """
+    # Start by setting up descriptors for the synthetic sets, and converting them to useful names and values for output
+    scores_list = []
+    warnings.warn("Currently assumping that the synthetic sets are described with prompt names (small/med/large) and rep sizes (2/4/6/8)")
+    scores_col_names = ["set_name", "prompt_val", "prompt_name", "reps"]
+    # Loop through the sets and add each set's descriptors and scores
+    for syn_set in synthetic_datasets.keys():
+        # For each synthetic set, get it's set-type descriptors
+        prompt = syn_set[:syn_set.find('-')]
+        if prompt in ['small', 'med', 'large']: #convert small/med/large prompt to 0.25/0.5/0.75 and quarter/half/three-quarters for the plotting
+            prompt_val = {'small': 0.25, 'med': 0.5, 'large': 0.75}[prompt]
+            prompt_name = {'small': 'quarter', 'med': 'half', 'large': 'three-quarters'}[prompt]
+        else:
+            raise ValueError(f"Unrecognised prompt name, {prompt}")
+        reps = syn_set[syn_set.find('-')+1:]
+        set_score_list = [syn_set, prompt_val, prompt_name, reps]
+        # Then for each validation method, add that methods' score to the score list, and check its name is in the columns list
+        val_methods = ["class_acc", "fid_inf"]
+        for val_method in val_methods:
+            set_score_list += [scores_dict[val_method][syn_set]]
+            if val_method not in scores_col_names:
+                scores_col_names += [val_method]
+            if val_method == "class_acc": # If we're testing classification accuracy, also compute the accuracy index from the baseline_test_acc
+                acc = scores_dict[val_method][syn_set]
+                index = acc / baseline_test_acc # * 100
+                set_score_list += [index]
+                if "acc_ind" not in scores_col_names:
+                    scores_col_names += ["acc_ind"]
+        scores_list.append(set_score_list)
+    # With a list of lists of scores and corresponding column names, convert these into a dataframe
+    score_df = pd.DataFrame(scores_list, columns = scores_col_names)
+    return score_df
+
+def seed_subset_accuracies(seed, syn_data_dict, synthetic_label_sets_by_seed, train_dataset, n_samp, test_dataset, syn_augment, 
+                           images_true, y_train_true, device, device_name, augment = False, aug_var = 3, aug_ratio = 2, syn_vary_aug_ratio = False):
+    """ Function to calculate classifier accuracy on seeded set of synthetic datasets (multiple synthetic datasets of different types generated from one seed).
+        Calculate the corresponding training sample for that seed (if needed for syn_augmentation), and calculate the classifier accuracy dict for given set of synthetic datasets. """
+    seed_label_set = synthetic_label_sets_by_seed[seed]    
+    # set up the real data to be syn_augmented with (if desired) - make sure to sample with the same seed as the given synthetic set for most representative results
+    train_samp, images_true, y_train_true = train_sampler(train_dataset, n_samp, seed = int(seed))
+
+    _, seed_baseline_test_acc, seed_accuracy_dict = classifier_accuracies(syn_data_dict, seed_label_set, train_samp, test_dataset, syn_augment, images_true, y_train_true, device, device_name, 
+                                                                         augment = augment, aug_var = aug_var, aug_ratio = aug_ratio, syn_vary_aug_ratio = syn_vary_aug_ratio, verbose = False)
+    return seed_baseline_test_acc, seed_accuracy_dict    
+
+def calc_err_bars(score_df, other_seeds_path, train_dataset, n_samp, test_dataset, CNN_params, syn_augment, 
+                       images_true, y_train_true, baseline_test_acc, device, device_name,
+                       zipped = False, augment = False, aug_var = 3, aug_ratio = 2, syn_vary_aug_ratio = False):
+    """Function to extend the charts with error bars calculated across multiple sets of synthetic datasets.
+        Assumes score_df contains one dataset from seed 42 (gives an extra row of data for no additional work.)
+    Args:
+        score_df (DataFrame): Dataframe of scores from existing experiments (minimises code repetition)
+        other_seeds_path (string): filepath of folder to access the data from
+        train_dataset (Dataset): Original training data (to be re-sampled from to equate with synthetic data)
+        n_samp (int): Sample size 
+        test_dataset (Dataset): Holdout test dataset to calculate accuracies against
+        CNN_params (dict): Set of parameters for the given CNN model
+        syn_augment (Bool): Whether or not to syn_augment the synthetic data with the real data (provided below)
+        images_true (tensor): Real images to syn_augment the synthetic data with (if desired)
+        y_train_true (List): Real labels accompanying the real images.
+        baseline_test_acc (Float): Baseline test accuracy from existing experiments, for computing accuracy indexes (minimises code repetition).
+        device (torch device): Device to run computing on
+        device_name (str): Name of the above device
+        zipped (bool): If the selected folder is zipped, need to additionally unzip in the process. Defaults to False.
+        dstl_fid_err (bool): Whether to additionally calculate errors for the FID. Defaults to False.
+        augment (Boolean, optional): Whether or not to carry out non-synthetic (transformational)data augments as part of the nn training. Defaults to False.
+        aug_var (Float, optional): If augment==True, the variability parameter for the augments. Must be non-negative, typically <= 5. Defaults to 3.
+        aug_ratio (Float, optional): If augment==True, the amount of data to create with non-synthetic augmentations. Must be >1, defaults to 2.
+        syn_vary_aug_ratio (Boolean, optional): If augment==True, this controls whether to vary the aug_ratio for synthetic sets to use less augmenting data with more synthetic replicates. Defaults to False.
+    Returns:
+        score_df_combo (DataFrame): df of the different accuracy, accuracy index and FID (if specified) scores for each of the synthetic subsets.
+        acc_index_df (DataFrame): df of the accuracies per index (useful for boxplot)
+        experiment_count (int): The number of experiments run over/the number of repeat datasets analysed (useful as reference).
+    """
+    # Import the by-seed sets of synthetic datasets.
+    synthetic_datasets_by_seed, synthetic_label_sets_by_seed = synthetic_data_import(other_seeds_path, split_by_type = True, split_method = "prompt_rep", seed_subset = True, zipped = zipped)
+    print("Progress :: To plot accuracy error bars, computing classifier accuracies for other synthetic datasets.")
+    accuracies_dict = {}
+    baseline_accuracies_dict = {}
+    fids_dict = {}
+    for seed, syn_data_dict in synthetic_datasets_by_seed.items():
+        print(f"Progress :: Computing accuracies for seed {seed} out of {list(synthetic_datasets_by_seed.keys())}")
+        seed_baseline_test_acc, seed_accuracy_dict = seed_subset_accuracies(seed, syn_data_dict, synthetic_label_sets_by_seed, train_dataset, n_samp, test_dataset, syn_augment, 
+                                                            images_true, y_train_true, device, device_name, augment=augment, 
+                                                            aug_var=aug_var, aug_ratio=aug_ratio, syn_vary_aug_ratio=syn_vary_aug_ratio)
+
+        accuracies_dict[seed] = seed_accuracy_dict
+        baseline_accuracies_dict[seed] = seed_baseline_test_acc
+        # If either FID method is specified in val_methods, and FID errors are desired, calculate the FID for each synthetic dataset.
+
+        seed_fid_dict = calculate_fid_infs(syn_data_dict, images_true, CNN_params["device"], min_fake = 900)
+        fids_dict[seed] = seed_fid_dict
+
+    # Reshape the existing outputs for error bar plotting
+    baseline_accuracies_dict["42"] = baseline_test_acc
+    accuracies_dict["42"] = dict(zip(score_df["set_name"], score_df["class_acc"]))
+    accuracies_df = pd.DataFrame.from_dict(accuracies_dict, orient="index")
+
+    # Calculate the accuracy index from the baseline accuracies
+    acc_index_df = accuracies_df.div(accuracies_df.index.map(baseline_accuracies_dict), axis=0)#.multiply(100)
+    # Calculate the median, lower and upper quartile accuracies & acc index for the errorbar plots
+    agg_results = {}
+    for col in accuracies_df.columns:
+        lq_acc, med_acc, uq_acc = np.percentile(accuracies_df[col], [25, 50, 75], axis = 0) # I think axis = 0 is right?
+        lq_ind, med_ind, uq_ind = np.percentile(acc_index_df[col], [25, 50, 75], axis = 0)
+        agg_results[col] = {
+            'lq_acc': lq_acc, 'med_acc': med_acc, 'uq_acc': uq_acc,
+            'lq_acc_ind': lq_ind, 'med_acc_ind': med_ind, 'uq_acc_ind': uq_ind}
+    agg_acc_df = pd.DataFrame(agg_results).T
+    agg_acc_df.index.name = "set_name"
+    agg_acc_df = agg_acc_df.reset_index()
+    # Merge these into the main score df, then calculate the error between median and upper/lower quartile accuracy index
+    score_df_combo = pd.merge(score_df.drop(columns=["class_acc", "acc_ind"], inplace=False), agg_acc_df, on = "set_name")
+    score_df_combo['uq_ind_err'] = score_df_combo['uq_acc_ind'] - score_df_combo['med_acc_ind']
+    score_df_combo['lq_ind_err'] = score_df_combo['med_acc_ind'] - score_df_combo['lq_acc_ind']
+    
+    # If FID errors are specified, and the method is specified (regular or FID_inf), carry on with the second plot. If both methods are specified, prioritise FID_inf.
+    fid_type = "fid_inf"
+    # Similar to accuracies, add in the FID value from the extra dataset from score_df. 
+    # Then calculate the median, uq & lq, merge these into the main score_df, and calculate the respective errors for errorbar plotting
+    fids_dict["42"] = dict(zip(score_df["set_name"], score_df[fid_type]))
+    fids_df = pd.DataFrame.from_dict(fids_dict, orient="index")
+    agg_fid_results = {}
+    for col in fids_df.columns:
+        lq_fid, med_fid, uq_fid = np.percentile(fids_df[col], [25, 50, 75], axis = 0)
+        agg_fid_results[col] = {
+            'lq_fid': lq_fid, 'med_fid': med_fid, 'uq_fid': uq_fid}
+    agg_fid_df = pd.DataFrame(agg_fid_results).T
+    agg_fid_df.index.name = "set_name"
+    agg_fid_df = agg_fid_df.reset_index()
+    score_df_combo = pd.merge(score_df_combo, agg_fid_df, on = "set_name")
+    score_df_combo["uq_fid_err"] = score_df_combo["uq_fid"]-score_df_combo["med_fid"]
+    score_df_combo["lq_fid_err"] = score_df_combo["med_fid"]-score_df_combo["lq_fid"]
+
+    experiment_count = len(accuracies_df)
+    return score_df_combo, acc_index_df, experiment_count
+
 def split_dataset_by_class(dataset, class_list):
     sorted_data = {key: [] for key in class_list}
     for image, label in dataset:
@@ -733,7 +1187,7 @@ def train_gan(train_data, resume_generator = False, resume_discriminator = False
         nn_p_drop (0<=float<1, optional): Dropout probability for the discriminator. Defaults to 0.
         label_smoothing (0<float<0.5, optional): Parameter to smooth the discriminator labels to reduce overconfidence. Probably anything above 0.2 is risky. Defaults to 0.
         disc_noise_std (float>=0, optional). Standard deviation of noise to add to images to feed into discriminator to minimise vanishing gradient. Defaults to 0.
-        augmentation (bool, optional): Whether non-synthetic (transformational) image augmentations are to be used. Defaults to False.
+        augmentation (bool, optional): Whether conventional (transformational) image augmentations are to be used. Defaults to False.
         aug_ratio (float, optional): If augmentation, the proportion of augmented images to create. Must be >= 1. Defaults to 2.
         aug_var (float, optional): If augmentation, the transform variability parameter to use, typically a value between 0 and 5 (0 for no augmentations). Defaults to 3.
         gan_type (str, optional): Type of GAN model to train. Currently accepts one of ["v1", "v2", "cond_v1"]
@@ -1352,53 +1806,16 @@ def load_inception_net(parallel=False):
         inception_model = nn.DataParallel(inception_model)
     return inception_model
 
-def calculate_FID_infinity_array(real_arr, fake_arr, batch_size=50, min_fake=5000, num_points=15):
-    """
-    Calculates effectively unbiased FID_inf using extrapolation given 
-    arrays (currently working with torch tensors) of real & synthetic data
-    Args:
-        real_array: (arr)
-            An array of real data, n images in 3 colour channels, shape:
-            n by 3 by x by y 
-        fake_array: (arr)
-            An array of fake data, m images in 3 colour channels, shape:
-            m by 3 by x by y 
-        batch_size: (int)
-            The batch size for dataloader.
-            Default: 50
-        min_fake: (int)
-            Minimum number of images to evaluate FID on.
-            Default: 5000
-        num_points: (int)
-            Number of FID_N we evaluate to fit a line.
-            Default: 15
-    """
-
-    # load pretrained inception model 
-    inception_model = load_inception_net()
-
-    # get all activations of the images
-    ## real_act, _ = compute_path_statistics(real_path, batch_size, model=inception_model)
-    ## real_m, real_s = np.mean(real_act, axis=0), np.cov(real_act, rowvar=False)
-
-    ##### real_m, real_s = calculate_activation_statistics_from_arrays(real_arr, batch_size, model=inception_model, dims = 2048, device = "mps")
-
-    real_dataloader = torch.utils.data.DataLoader(real_arr, batch_size=batch_size, drop_last=False)
-    real_act, _ = get_activations(real_dataloader, model=inception_model)
-    real_m, real_s = np.mean(real_act, axis=0), np.cov(real_act, rowvar=False)
-
-    fake_dataloader = torch.utils.data.DataLoader(fake_arr, batch_size=batch_size, drop_last=False)
-    fake_act, _ = get_activations(fake_dataloader, model=inception_model)
-
+def FID_inf_from_acts(real_m, real_s, fake_act, min_fake, num_points):
+    # Utility function to calculate the FID_inf from real mu & sigma, and synthetic activations.
+    # Separated out to use in multiple functions
     num_fake = len(fake_act)
     assert num_fake > min_fake, \
         'number of fake data must be greater than the minimum point for extrapolation'
 
-    fids = []
-
     # Choose the number of images to evaluate FID_N at regular intervals over N
     fid_batches = np.linspace(min_fake, num_fake, num_points).astype('int32')
-
+    fids = []
     # Evaluate FID_N
     for fid_batch_size in fid_batches:
         # sample with replacement
@@ -1412,5 +1829,68 @@ def calculate_FID_infinity_array(real_arr, fake_arr, batch_size=50, min_fake=500
     # Fit linear regression
     reg = LinearRegression().fit(1/fid_batches.reshape(-1, 1), fids)
     fid_infinity = reg.predict(np.array([[0]]))[0,0]
-
     return fid_infinity
+
+
+def calculate_FID_infinity_array(real_arr, fake_arr, min_fake=5000, num_points=15, device_name="cpu"):
+    """
+    Rework of this function to use the pytorch-fid implementation.
+    Calculates effectively unbiased FID_inf using extrapolation given 
+    arrays (currently working with torch tensors) of real & synthetic data
+    Args:
+        real_array: (arr) 
+            An array of real data, n images in 3 colour channels, shape:
+            n by 3 by x by y 
+        fake_array: (arr)
+            An array of fake data, m images in 3 colour channels, shape:
+            m by 3 by x by y 
+        min_fake: (int)
+            Minimum number of images to evaluate FID on.
+            Default: 5000
+        num_points: (int)
+            Number of FID_N we evaluate to fit a line.
+            Default: 15
+    """
+    # Setup the inception model
+    #device_name = "mps"
+    incep_batch_size = 50
+    incep_dims = 2048
+    device = torch.device(device_name)
+    incep_mod = InceptionV3([InceptionV3.BLOCK_INDEX_BY_DIM[incep_dims]]).to(device)
+
+    real_m, real_s = calculate_activation_statistics_from_arrays(real_arr, incep_mod, incep_batch_size, incep_dims, device)
+    fake_act = calculate_activations_from_arr(fake_arr, incep_mod, incep_batch_size, incep_dims, device)
+    # This function takes the real mu & sigma, and initial synthetic activations, and calculates FID infinity from those
+    fid_infinity = FID_inf_from_acts(real_m, real_s, fake_act, min_fake, num_points)
+    return fid_infinity
+
+def calculate_fid_infs(synthetic_datasets, images_true, device, min_fake=5000, num_points=15, verbose = False):
+    """Calculate the FID_inf of sets of synthetic data against a set of real data
+    Args:
+        synthetic_datasets (dict): The synthetic images to assess FID for. Dict of datasets keyed by synthetic image type, each element is n x 3 x 32 x 32 array of n images.
+        images_true (tensor): Real images to compare FID against
+        device (torch device): Device to run computing on
+        min_fake: (int)
+            Minimum number of images to evaluate FID on.
+            Default: 5000
+        num_points: (int)
+            Number of FID_N we evaluate to fit a line.
+            Default: 15
+    Returns:
+        dict: Dictionary of FID_inf values for each synthetic set
+    """
+    # Preset FID inception model parameters
+    incep_dims = 2048; incep_batch_size = 50
+    incep_mod = InceptionV3([InceptionV3.BLOCK_INDEX_BY_DIM[incep_dims]]).to(device)
+    if verbose:
+        print("Progress :: For validation by FID_inf, calculating baseline inception statistics on the real images.")
+    mu_true, sigma_true = calculate_activation_statistics_from_arrays(images_true, incep_mod, incep_batch_size, incep_dims, device)
+    if verbose:
+        print("Progress :: Calculating FID_inf scores on the synthetic data")
+    fid_inf_dict = {}
+    for syn_set, data in synthetic_datasets.items(): # loop through the input synthetic datasets
+        # Calculate the activation statistics for each synthetic set, then the frechet distance of that against the baseline real data, and save to fid_inf_dict, keyed by set_name
+        fake_arr = torch.from_numpy(np.array(data).reshape(-1, 3, 32, 32)).float()
+        fake_act = calculate_activations_from_arr(fake_arr, incep_mod, incep_batch_size, incep_dims, device)
+        fid_inf_dict[syn_set] = FID_inf_from_acts(mu_true, sigma_true, fake_act, min_fake, num_points)
+    return fid_inf_dict
