@@ -1,6 +1,5 @@
 
 import os
-import utils
 from transformers import ImageGPTImageProcessor, ImageGPTForCausalImageModeling
 import h5py
 import matplotlib.pyplot as plt
@@ -11,6 +10,9 @@ import torchvision
 import torchvision.transforms as transforms
 from docopt import docopt
 import fgvcdata
+
+import utils
+
 
 def img_resize_const_ratio(img, target_width, target_height):
     # Ensure image in correct format
@@ -325,7 +327,7 @@ if __name__ == "__main__":
     # device_name = "mps" if torch.backends.mps.is_available() else "cpu"
     # device_name = "cpu"
 
-
+    print(h5_path)
     #Define other key parameters/code running options
     test_data_needed = False # saves downloading a chunk of data
     # out_img_sz = 32 # size of the cifar image (assume square)
@@ -338,6 +340,7 @@ if __name__ == "__main__":
         if p in prompts:
             prompt_sizes[p] = v
 
+    print('Input path:', h5_path)
     print('Samples:', n_samp)
     print('Replicates:', rep_sizes)
     print('Prompts:', prompt_sizes)
