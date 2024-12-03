@@ -1,7 +1,7 @@
 #### my stuff
 data/cifar-10-orig
-data/image_gpt/synthetic_cifar_seed_42
-data/image_gpt/synthetic_cifar_43_to_47.zip
+data/image_gpt_tidied
+data/igpt_syn_data
 models
 
 
