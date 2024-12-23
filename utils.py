@@ -1573,7 +1573,8 @@ def test_gan(gen_model_version, reps = 1, model_type = "v2", gen_model_parent_pa
         return summary_dict
     
 def plot_gan_output(gen_model, n_syn = 2, model_type = "v2", label_dict = None, model_save_type = "state_dict",
-        nn_input_size = 100, nn_n_layers_gen = 5, n_classes = None, seed = None, wrap_single = False, man_title = None):
+        nn_input_size = 100, nn_n_layers_gen = 5, n_classes = None, seed = None, wrap_single = False, 
+        man_title = None, plot_titles = True, save_name = None):
 
     label_list = gen_model.keys()
     n_classes = len(label_list)
@@ -1594,9 +1595,13 @@ def plot_gan_output(gen_model, n_syn = 2, model_type = "v2", label_dict = None, 
             ax.imshow(np.array(img).transpose(1, 2, 0))
             ax.axis('off')  # Optional: Turn off axis
             if label_dict is not None:
-                ax.set_title(f"Image: {label_dict[label].decode('utf-8')}", fontsize=24)
+                ax.set_title(f"{label_dict[label].decode('utf-8')}", fontsize=34)
             else: 
-                ax.set_title(f"Image: {label}", fontsize=24)
+                ax.set_title(f"{label}", fontsize=34)
+            # if label_dict is not None:
+            #     ax.set_title(f"Image: {label_dict[label].decode('utf-8')}", fontsize=34)
+            # else: 
+            #     ax.set_title(f"Image: {label}", fontsize=34)
 
             plt.subplots_adjust(hspace = 0.2)
         
@@ -1614,14 +1619,22 @@ def plot_gan_output(gen_model, n_syn = 2, model_type = "v2", label_dict = None, 
                 ax.axis('off')  # Optional: Turn off axis
                 if i == 0:
                     if label_dict is not None:
-                        ax.set_title(f"Image: {label_dict[label].decode('utf-8')}", fontsize=24)
+                        ax.set_title(f"{label_dict[label].decode('utf-8')}", fontsize=34)
                     else: 
-                        ax.set_title(f"Image: {label}", fontsize=24)
+                        ax.set_title(f"{label}", fontsize=34)
+                    # if label_dict is not None:
+                    #     ax.set_title(f"Image: {label_dict[label].decode('utf-8')}", fontsize=34)
+                    # else: 
+                    #     ax.set_title(f"Image: {label}", fontsize=34)
     title_text = man_title if man_title is not None else "Sample images from GAN"
     y_height = 1.03 if wrap_single else 1.1
-    plt.suptitle(title_text, fontsize=36, y=y_height)
-    plt.show()
+    if plot_titles:
+        plt.suptitle(title_text, fontsize=36, y=y_height)
+        
+    if save_name is not None:
+        plt.savefig(save_name, format="pdf", bbox_inches="tight")
 
+    plt.show()
     
 def calculate_frechet_distance(mu1, sigma1, mu2, sigma2, eps=1e-6):
     """Numpy implementation of the Frechet Distance.
