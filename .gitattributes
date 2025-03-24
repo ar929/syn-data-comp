@@ -1,0 +1,6 @@
+more_igpt_data/** filter=lfs diff=lfs merge=lfs -text
+more_igpt_output/** filter=lfs diff=lfs merge=lfs -text
+data/** filter=lfs diff=lfs merge=lfs -text
+models_save_space/** filter=lfs diff=lfs merge=lfs -text
+synthetic_output/** filter=lfs diff=lfs merge=lfs -text
+igpt_data/ filter=lfs diff=lfs merge=lfs -text
