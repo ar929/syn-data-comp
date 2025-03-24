@@ -697,6 +697,8 @@ def synthetic_type_split_import(folder_path, split_method, name_cond = None, zip
         if prompt_set == "full":
             prompt_sizes = ['small', 'med', 'large']
             rep_sizes = ['2', '4', '6', '8']
+            prompt_sizes = ['small', 'med', 'large']
+            rep_sizes = ['2', '4', '6', '8', '9', '11', '14', '19']
         else:
             prompt_sizes = list(set(item.split('-')[0] for item in prompt_set))
             rep_sizes = list(set(item.split('-')[1] for item in prompt_set))
@@ -721,7 +723,10 @@ def synthetic_type_split_import(folder_path, split_method, name_cond = None, zip
                         if image is not None: # save the image
                             # Get the prompt & rep sizes from the image title
                             prompt = filename[:filename.find('-prompt')]
-                            rep = filename[filename.find('rep-size_')+len('rep-size_')]
+                            # rep = filename[filename.find('rep-size_')+len('rep-size_')]
+                            start = filename.find('rep-size_') + len('rep-size_')
+                            end = filename.find('_', start)  # Find the next underscore after 'rep-size_'
+                            rep = filename[start:end]  # Extract the substring between 'rep-size_' and the next underscore
                         # Initialize a 4D array if it's not already initialized to store the data in
                             if synthetic_datasets[prompt + '-' + rep] is None:
                                 synthetic_datasets[prompt + '-' + rep] = np.transpose(image, (2, 0, 1))[np.newaxis, ...]  # reshape the image to 3 x 32 x 32 as that's how the classifier is set up and add to 4D array
@@ -744,7 +749,10 @@ def synthetic_type_split_import(folder_path, split_method, name_cond = None, zip
                         if image is not None: # save the image
                             # Get the prompt & rep sizes from the image title
                             prompt = filename[:filename.find('-prompt')]
-                            rep = filename[filename.find('rep-size_')+len('rep-size_')]
+                            # rep = filename[filename.find('rep-size_')+len('rep-size_')]
+                            start = filename.find('rep-size_') + len('rep-size_')
+                            end = filename.find('_', start)  # Find the next underscore after 'rep-size_'
+                            rep = filename[start:end]  # Extract the substring between 'rep-size_' and the next underscore
 
                         # Initialize a 4D array if it's not already initialized to store the data in
                             if synthetic_datasets[prompt + '-' + rep] is None:
@@ -1595,13 +1603,13 @@ def plot_gan_output(gen_model, n_syn = 2, model_type = "v2", label_dict = None, 
             ax.imshow(np.array(img).transpose(1, 2, 0))
             ax.axis('off')  # Optional: Turn off axis
             if label_dict is not None:
-                ax.set_title(f"{label_dict[label].decode('utf-8')}", fontsize=34)
+                ax.set_title(f"{label_dict[label].decode('utf-8')}", fontsize=37)
             else: 
-                ax.set_title(f"{label}", fontsize=34)
+                ax.set_title(f"{label}", fontsize=37)
             # if label_dict is not None:
-            #     ax.set_title(f"Image: {label_dict[label].decode('utf-8')}", fontsize=34)
+            #     ax.set_title(f"Image: {label_dict[label].decode('utf-8')}", fontsize=37)
             # else: 
-            #     ax.set_title(f"Image: {label}", fontsize=34)
+            #     ax.set_title(f"Image: {label}", fontsize=37)
 
             plt.subplots_adjust(hspace = 0.2)
         
@@ -1619,17 +1627,17 @@ def plot_gan_output(gen_model, n_syn = 2, model_type = "v2", label_dict = None, 
                 ax.axis('off')  # Optional: Turn off axis
                 if i == 0:
                     if label_dict is not None:
-                        ax.set_title(f"{label_dict[label].decode('utf-8')}", fontsize=34)
+                        ax.set_title(f"{label_dict[label].decode('utf-8')}", fontsize=37)
                     else: 
-                        ax.set_title(f"{label}", fontsize=34)
+                        ax.set_title(f"{label}", fontsize=37)
                     # if label_dict is not None:
-                    #     ax.set_title(f"Image: {label_dict[label].decode('utf-8')}", fontsize=34)
+                    #     ax.set_title(f"Image: {label_dict[label].decode('utf-8')}", fontsize=37)
                     # else: 
-                    #     ax.set_title(f"Image: {label}", fontsize=34)
+                    #     ax.set_title(f"Image: {label}", fontsize=37)
     title_text = man_title if man_title is not None else "Sample images from GAN"
-    y_height = 1.03 if wrap_single else 1.1
+    y_height = 1.06 if wrap_single else 1.1
     if plot_titles:
-        plt.suptitle(title_text, fontsize=36, y=y_height)
+        plt.suptitle(title_text, fontsize=48, y=y_height)
         
     if save_name is not None:
         plt.savefig(save_name, format="pdf", bbox_inches="tight")

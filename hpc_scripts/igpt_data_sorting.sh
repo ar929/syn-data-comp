@@ -19,6 +19,14 @@ SOURCE_FOLDER="${HOME}/syn_data/synthetic_output"
 SEED_42_FOLDER="${HOME}/syn_data/igpt_data/synthetic_cifar_seed_42"
 OTHER_FILES_FOLDER="${HOME}/syn_data/igpt_data/synthetic_cifar_43_to_47"
 
+SOURCE_FOLDER="synthetic_output"
+SEED_42_FOLDER="igpt_data/synthetic_cifar_seed_42"
+OTHER_FILES_FOLDER="igpt_data/synthetic_cifar_43_to_47"
+
+SOURCE_FOLDER="more_igpt_output"
+SEED_42_FOLDER="more_igpt_data/synthetic_cifar_seed_42"
+OTHER_FILES_FOLDER="more_igpt_data/synthetic_cifar_43_to_47"
+
 # Create target directories if they don't exist
 mkdir -p "$SEED_42_FOLDER"
 mkdir -p "$OTHER_FILES_FOLDER"
