@@ -3,7 +3,10 @@ data/cifar-10-orig
 data/image_gpt_tidied
 data/igpt_syn_data
 models
-
+igpt_data
+more_igpt_data
+more_igpt_output
+synthetic_output
 
 #### Defaults suggested by git
 
