@@ -1,1 +1,3 @@
-{"mean": {"class_rel_acc": 1.1426675442334873, "fid": 126.22592345019561, "fid_inf": 116.60068836149544}, "std": {"class_rel_acc": 0.046738352092388136, "fid": 0.5672458319262726, "fid_inf": 0.1757146746567859}}
+version https://git-lfs.github.com/spec/v1
+oid sha256:d7c3b05b55abeaeca99922167ad1e81c3b3839a78b5478a9fc58cc8c719a4fa9
+size 211
