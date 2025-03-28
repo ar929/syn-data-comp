@@ -1,3 +1,17 @@
+#### my stuff
+data/cifar-10-orig
+data/image_gpt_tidied
+data/igpt_syn_data
+models
+igpt_data
+more_igpt_data
+more_igpt_output
+synthetic_output
+
+######### models_save_space # def want to make sure this is uploaded!
+
+#### Defaults suggested by git
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -19,7 +33,7 @@ lib64/
 parts/
 sdist/
 var/
-wheels/
+wheels/ß
 share/python-wheels/
 *.egg-info/
 .installed.cfg
